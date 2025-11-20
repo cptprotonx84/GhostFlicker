@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Spark Delivery: Stable Version</title>
+    <title>Spark Delivery: Engine Edition</title>
     <style>
         body {
             margin: 0;
@@ -16,7 +16,7 @@
             color: white;
             font-family: Arial, sans-serif;
             overflow: hidden;
-            touch-action: none; /* Critical for mobile */
+            touch-action: none; 
         }
         canvas {
             border: 2px solid #fff;
@@ -28,6 +28,7 @@
             touch-action: none;
         }
         
+        /* UI Layer */
         #ui-layer {
             position: absolute;
             top: 10px;
@@ -45,6 +46,7 @@
             text-shadow: 1px 1px 0 #000;
         }
 
+        /* Start Screen */
         #start-screen {
             position: absolute;
             background: rgba(0, 0, 0, 0.9);
@@ -70,6 +72,7 @@
         .car-option:hover { background: #555; }
         .car-title { font-size: 20px; margin-bottom: 10px; font-weight: bold; }
         
+        /* Controls */
         #controls {
             display: flex;
             justify-content: space-between;
@@ -113,7 +116,7 @@
     </div>
 
     <div id="ui-layer">
-        <div id="timeDisplay" class="hud-text">Time: 30</div>
+        <div id="timeDisplay" class="hud-text">Time: 60</div>
         <div id="scoreDisplay" class="hud-text" style="color:#85bb65">Tips: $0</div>
     </div>
 
@@ -132,370 +135,96 @@
     const ctx = canvas.getContext("2d");
     const startScreen = document.getElementById("start-screen");
 
-    // --- 16-BIT SOUND ENGINE (Improved) ---
+    // --- ADVANCED SOUND ENGINE ---
     const SoundEngine = {
         ctx: null,
+        engineOsc: null,
+        engineGain: null,
+
         init: function() {
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             if (!this.ctx) {
                 this.ctx = new AudioContext();
             }
-            // FIX: Ensure context is running (Chrome sometimes suspends it)
             if (this.ctx.state === 'suspended') {
                 this.ctx.resume();
             }
+            this.startIdleEngine();
         },
-        playTone: function(freq, type, duration) {
-            if (!this.ctx) return;
-            const osc = this.ctx.createOscillator();
-            const gain = this.ctx.createGain();
-            
-            osc.type = type;
-            osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
-            
-            osc.connect(gain);
-            gain.connect(this.ctx.destination);
-            
-            osc.start();
-            gain.gain.setValueAtTime(0.1, this.ctx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.0001, this.ctx.currentTime + duration);
-            osc.stop(this.ctx.currentTime + duration);
+
+        // Creates a persistent engine loop
+        startIdleEngine: function() {
+            if (this.engineOsc) return; // Already running
+
+            this.engineOsc = this.ctx.createOscillator();
+            this.engineGain = this.ctx.createGain();
+
+            // Sawtooth sounds buzzy like a motor
+            this.engineOsc.type = 'sawtooth'; 
+            this.engineOsc.frequency.value = 60; // Low rumble
+
+            this.engineOsc.connect(this.engineGain);
+            this.engineGain.connect(this.ctx.destination);
+
+            // Set volume low so it's not annoying
+            this.engineGain.gain.value = 0.05; 
+            this.engineOsc.start();
         },
+
+        // Updates the engine pitch based on speed
+        updateEngineRPM: function(isMoving) {
+            if (!this.engineOsc) return;
+            
+            let targetFreq = isMoving ? 120 : 60; // High pitch moving, low pitch idle
+            let currentTime = this.ctx.currentTime;
+
+            // Smoothly transition the pitch
+            this.engineOsc.frequency.setTargetAtTime(targetFreq, currentTime, 0.1);
+        },
+
+        stopEngine: function() {
+            if (this.engineGain) {
+                this.engineGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
+            }
+        },
+        
+        resumeEngine: function() {
+             if (this.engineGain) {
+                this.engineGain.gain.setTargetAtTime(0.05, this.ctx.currentTime, 0.1);
+            }
+        },
+
+        // The REV sound for jumping
         jump: function() {
             if (!this.ctx) return;
             const osc = this.ctx.createOscillator();
             const gain = this.ctx.createGain();
-            osc.type = 'square'; 
             
-            osc.frequency.setValueAtTime(150, this.ctx.currentTime);
-            osc.frequency.linearRampToValueAtTime(300, this.ctx.currentTime + 0.1);
+            osc.type = 'sawtooth'; // Buzzy rev sound
+            
+            // Start at mid RPM and rev HIGH quickly
+            osc.frequency.setValueAtTime(100, this.ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(400, this.ctx.currentTime + 0.3);
             
             osc.connect(gain);
             gain.connect(this.ctx.destination);
             
+            // Volume envelope (Quick burst)
             gain.gain.setValueAtTime(0.1, this.ctx.currentTime);
-            gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.1);
+            gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.3);
             
             osc.start();
-            osc.stop(this.ctx.currentTime + 0.1);
+            osc.stop(this.ctx.currentTime + 0.3);
         },
-        collect: function() {
-            this.playTone(1200, 'sine', 0.1); 
-            setTimeout(() => this.playTone(1800, 'sine', 0.2), 50);
-        },
-        win: function() {
-            this.playTone(400, 'triangle', 0.1);
-            setTimeout(() => this.playTone(500, 'triangle', 0.1), 100);
-            setTimeout(() => this.playTone(600, 'triangle', 0.1), 200);
-            setTimeout(() => this.playTone(800, 'square', 0.4), 300);
-        }
-    };
 
-    // --- Game Constants ---
-    const gravity = 0.5;
-    const friction = 0.8;
-    const totalTime = 30; 
-    
-    // --- Game State ---
-    let keys = [];
-    let deliveryPhase = false; 
-    let gameWon = false;
-    let score = 0;
-    let timeLeft = totalTime;
-    let lastTime = Date.now(); 
-    let isGameOver = false;
-    let gameRunning = false; 
-
-    // --- Player ---
-    let player = {
-        x: 50, y: 200, 
-        width: 80, height: 35,
-        speed: 5, velX: 0, velY: 0, 
-        jumping: false, facingRight: true,
-        type: 'suv' 
-    };
-
-    // --- Select Car ---
-    function selectCar(type) {
-        SoundEngine.init(); // Initialize Audio
-
-        player.type = type;
-        if (type === 'suv') {
-            player.width = 80;
-            player.height = 35;
-        } else {
-            player.width = 65; 
-            player.height = 32;
-        }
-        
-        startScreen.style.display = 'none';
-        resetGame();
-        gameRunning = true;
-        lastTime = Date.now(); 
-    }
-
-    const packageBox = { x: 0, y: 0, width: 15, height: 15, velX: 0, velY: 0, active: false };
-    const goal = { x: 720, y: 250, width: 60, height: 100, color: "#32CD32" };
-
-    const platforms = [
-        { x: 0, y: 350, width: 800, height: 50 },
-        { x: 220, y: 290, width: 120, height: 10 },
-        { x: 400, y: 220, width: 120, height: 10 },
-        { x: 600, y: 280, width: 100, height: 10 },
-    ];
-
-    let tips = [
-        { x: 260, y: 250, width: 30, height: 15, collected: false },
-        { x: 450, y: 180, width: 30, height: 15, collected: false },
-        { x: 630, y: 240, width: 30, height: 15, collected: false },
-        { x: 350, y: 320, width: 30, height: 15, collected: false }
-    ];
-
-    // --- INPUT ---
-    function setKey(code, status) { keys[code] = status; }
-    document.body.addEventListener("keydown", e => keys[e.keyCode] = true);
-    document.body.addEventListener("keyup", e => keys[e.keyCode] = false);
-
-    const btnLeft = document.getElementById('btnLeft');
-    const btnRight = document.getElementById('btnRight');
-    const btnJump = document.getElementById('btnJump');
-
-    btnLeft.addEventListener('touchstart', (e) => { e.preventDefault(); setKey(37, true); });
-    btnLeft.addEventListener('touchend', (e) => { e.preventDefault(); setKey(37, false); });
-    btnRight.addEventListener('touchstart', (e) => { e.preventDefault(); setKey(39, true); });
-    btnRight.addEventListener('touchend', (e) => { e.preventDefault(); setKey(39, false); });
-    btnJump.addEventListener('touchstart', (e) => { e.preventDefault(); setKey(38, true); });
-    btnJump.addEventListener('touchend', (e) => { e.preventDefault(); setKey(38, false); });
-
-    // Mouse Fallbacks
-    btnLeft.addEventListener('mousedown', () => setKey(37, true));
-    btnLeft.addEventListener('mouseup', () => setKey(37, false));
-    btnRight.addEventListener('mousedown', () => setKey(39, true));
-    btnRight.addEventListener('mouseup', () => setKey(39, false));
-    btnJump.addEventListener('mousedown', () => setKey(38, true));
-    btnJump.addEventListener('mouseup', () => setKey(38, false));
-
-    function resetGame() {
-        // FIX: Clear input keys so car doesn't "stick" moving after alert
-        keys = []; 
-        
-        deliveryPhase = false;
-        gameWon = false;
-        isGameOver = false;
-        timeLeft = totalTime;
-        score = 0;
-        player.x = 50; player.y = 200; player.velX = 0; player.velY = 0;
-        packageBox.active = false;
-        tips.forEach(tip => tip.collected = false);
-        updateHUD();
-    }
-
-    function updateHUD() {
-        document.getElementById('timeDisplay').innerText = "Time: " + timeLeft;
-        document.getElementById('scoreDisplay').innerText = "Tips: $" + score;
-    }
-
-    function update() {
-        if (!gameRunning || gameWon || isGameOver) return;
-
-        if (!deliveryPhase) {
-            let now = Date.now();
-            if (now - lastTime >= 1000) {
-                timeLeft--;
-                lastTime = now;
-                updateHUD();
-                if (timeLeft <= 0) {
-                    isGameOver = true;
-                    alert("Time's up!");
-                    resetGame();
-                }
-            }
-        } else {
-            lastTime = Date.now();
-        }
-
-        if (deliveryPhase) {
-            packageBox.velY += gravity;
-            packageBox.x += packageBox.velX;
-            packageBox.y += packageBox.velY;
-            if (packageBox.y > canvas.height - 50 || packageBox.x > canvas.width) {
-                gameWon = true;
-                SoundEngine.win(); 
-                
-                let timeBonus = timeLeft * 2;
-                let total = score + timeBonus;
-                setTimeout(() => {
-                    alert(`Earnings: $${total}`);
-                    resetGame();
-                }, 500); 
-            }
-            return;
-        }
-
-        if (keys[39]) { if (player.velX < player.speed) player.velX++; player.facingRight = true; }
-        if (keys[37]) { if (player.velX > -player.speed) player.velX--; player.facingRight = false; }
-        
-        if (keys[38]) { 
-            if (!player.jumping) { 
-                player.jumping = true; 
-                player.velY = -10; 
-                SoundEngine.jump(); 
-            } 
-        }
-
-        player.velX *= friction;
-        player.velY += gravity;
-        player.x += player.velX;
-        player.y += player.velY;
-
-        if (player.x < 0) player.x = 0;
-        if (player.x > canvas.width - player.width) player.x = canvas.width - player.width;
-
-        player.grounded = false;
-        for (let i = 0; i < platforms.length; i++) {
-            let p = platforms[i];
-            if (player.x < p.x + p.width && player.x + player.width > p.x &&
-                player.y < p.y + p.height && player.y + player.height > p.y) {
-                if (player.velY > 0 && player.y + player.height < p.y + p.height / 2 + player.velY + 5) {
-                    player.jumping = false;
-                    player.velY = 0;
-                    player.y = p.y - player.height;
-                }
-            }
-        }
-        if(player.y > canvas.height){ player.y = 200; player.velY = 0; }
-
-        for (let i = 0; i < tips.length; i++) {
-            let t = tips[i];
-            if (!t.collected) {
-                if (player.x < t.x + t.width && player.x + player.width > t.x &&
-                    player.y < t.y + t.height && player.y + player.height > t.y) {
-                    t.collected = true;
-                    score += 5;
-                    SoundEngine.collect(); 
-                    updateHUD();
-                }
-            }
-        }
-
-        if (player.x < goal.x + goal.width && player.x + player.width > goal.x &&
-            player.y < goal.y + goal.height && player.y + player.height > goal.y) {
-            deliveryPhase = true;
-            packageBox.x = player.x + (player.width / 2);
-            packageBox.y = player.y;
-            packageBox.active = true;
-            packageBox.velY = -8; packageBox.velX = 4;
-            SoundEngine.jump(); 
-        }
-    }
-
-    function drawPlayer(x, y, w, h) {
-        if (player.type === 'suv') {
-            // --- RED SUV ---
-            ctx.fillStyle = "#D32F2F"; 
-            ctx.fillRect(x, y + h/2, w, h/2); 
-            let hood = 15;
-            ctx.fillRect(x + hood, y, w - hood - 5, h/2); 
-            ctx.fillStyle = "#87CEFA";
-            ctx.fillRect(x + hood + 5, y + 5, (w - hood - 5) / 2, h/2 - 10);
-            ctx.fillRect(x + hood + 25, y + 5, 15, h/2 - 10);
-            ctx.fillStyle = "#FFEB3B";
-            ctx.fillRect(player.facingRight ? x + w - 5 : x, y + h/2 + 5, 5, 8);
-            ctx.fillStyle = "black";
-            ctx.beginPath();
-            ctx.arc(x + 15, y + h, 10, 0, Math.PI * 2); 
-            ctx.arc(x + w - 15, y + h, 10, 0, Math.PI * 2); 
-            ctx.fill();
-            ctx.fillStyle = "#888"; 
-            ctx.beginPath();
-            ctx.arc(x + 15, y + h, 5, 0, Math.PI * 2);
-            ctx.arc(x + w - 15, y + h, 5, 0, Math.PI * 2);
-            ctx.fill();
-        } else {
-            // --- BLUE MIRAGE ---
-            ctx.fillStyle = "#00BFFF"; 
-            ctx.fillRect(x, y + h/2, w, h/2);
-            ctx.beginPath();
-            ctx.moveTo(x, y + h/2);
-            ctx.lineTo(x + 10, y); 
-            ctx.lineTo(x + w - 15, y); 
-            ctx.lineTo(x + w, y + h/2); 
-            ctx.fill();
-            ctx.fillStyle = "#009ACD"; 
-            ctx.fillRect(x - 3, y, 15, 5);
-            ctx.fillStyle = "#87CEFA";
-            ctx.beginPath();
-            ctx.moveTo(x + 5, y + h/2 - 2);
-            ctx.lineTo(x + 12, y + 5);
-            ctx.lineTo(x + w - 20, y + 5);
-            ctx.lineTo(x + w - 5, y + h/2 - 2);
-            ctx.fill();
-            ctx.fillStyle = "#FFEB3B";
-            ctx.fillRect(player.facingRight ? x + w - 5 : x, y + h/2 + 5, 5, 6);
-            ctx.fillStyle = "black";
-            ctx.beginPath();
-            ctx.arc(x + 12, y + h, 8, 0, Math.PI * 2); 
-            ctx.arc(x + w - 12, y + h, 8, 0, Math.PI * 2); 
-            ctx.fill();
-            ctx.fillStyle = "#CCC"; 
-            ctx.beginPath();
-            ctx.arc(x + 12, y + h, 4, 0, Math.PI * 2);
-            ctx.arc(x + w - 12, y + h, 4, 0, Math.PI * 2);
-            ctx.fill();
-        }
-    }
-
-    function draw() {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
-        ctx.fillStyle = "#333"; 
-        for (let i = 0; i < platforms.length; i++) {
-            ctx.fillRect(platforms[i].x, platforms[i].y, platforms[i].width, platforms[i].height);
-            ctx.fillStyle = "#FFF";
-            ctx.fillRect(platforms[i].x, platforms[i].y + 5, platforms[i].width, 2);
-            ctx.fillStyle = "#333"; 
-        }
-
-        for (let i = 0; i < tips.length; i++) {
-            let t = tips[i];
-            if (!t.collected) {
-                ctx.fillStyle = "#85bb65"; 
-                ctx.fillRect(t.x, t.y, t.width, t.height);
-                ctx.strokeStyle = "#2e8b57";
-                ctx.strokeRect(t.x, t.y, t.width, t.height);
-                ctx.fillStyle = "#004225"; 
-                ctx.font = "bold 10px Arial";
-                ctx.fillText("$", t.x + 8, t.y + 11);
-            }
-        }
-
-        ctx.fillStyle = "#8B4513"; 
-        ctx.fillRect(goal.x, goal.y, goal.width, goal.height);
-        ctx.fillStyle = "#FFF";
-        ctx.font = "14px Arial";
-        ctx.fillText("DROP", goal.x + 10, goal.y - 10);
-
-        if (gameRunning) {
-            drawPlayer(player.x, player.y, player.width, player.height);
-        }
-
-        if (deliveryPhase && packageBox.active) {
-            ctx.fillStyle = "white";
-            ctx.strokeStyle = "black";
-            ctx.lineWidth = 2;
-            ctx.fillRect(packageBox.x, packageBox.y, packageBox.width, packageBox.height);
-            ctx.strokeRect(packageBox.x, packageBox.y, packageBox.width, packageBox.height);
-        }
-    }
-
-    function loop() {
-        update();
-        draw();
-        requestAnimationFrame(loop);
-    }
-
-    loop();
-
-</script>
-</body>
-</html>
+        playTone: function(freq, type, duration, vol=0.1) {
+            if (!this.ctx) return;
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start();
+            gain.gain.setValueAtTime(vol, this.ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.000
